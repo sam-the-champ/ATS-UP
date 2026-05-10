@@ -1,0 +1,17 @@
+name: Production Deployment
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Install dependencies
+        run: npm install
+      - name: Run Tests
+        run: npm test
+      - name: Build Docker Image
+        run: docker build -t ats-backend .
+      # Here you would add steps to push to AWS ECR or Google Container Registry

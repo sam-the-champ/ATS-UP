@@ -1,0 +1,76 @@
+generator client {
+  provider      = "prisma-client-js"
+  // linux-preview is a catch-all for newer Linux environments like Codespaces
+  binaryTargets = ["native", "debian-openssl-3.0.x", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  EMPLOYER
+  CANDIDATE
+}
+
+model User {
+  id            String         @id @default(uuid())
+  email         String         @unique
+  password      String
+  role          Role           @default(CANDIDATE)
+  jobs          Job[]
+  applications  Application[]
+  refreshTokens RefreshToken[]
+  createdAt     DateTime       @default(now())
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+enum JobStatus {
+  DRAFT
+  OPEN
+  CLOSED
+  ARCHIVED
+}
+
+model Job {
+  id           String        @id @default(uuid())
+  title        String
+  description  String        @db.Text
+  location     String
+  salaryRange  String?
+  status       JobStatus     @default(OPEN)
+  employerId   String
+  employer     User          @relation(fields: [employerId], references: [id])
+  applications Application[]
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([employerId]) // Indexing for fast lookups by employer
+  @@index([status]) // Indexing for search performance
+  @@index([status, createdAt(sort: Desc)]) // Fast "Recent Open Jobs" query
+  @@index([location])                       // Fast location filtering
+}
+
+model Application {
+  id          String   @id @default(uuid())
+  jobId       String
+  candidateId String
+  resumeUrl   String
+  aiScore     Decimal?
+  status      String   @default("PENDING")
+  job         Job      @relation(fields: [jobId], references: [id])
+  candidate   User     @relation(fields: [candidateId], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([jobId, aiScore(sort: Desc)])    // Helps employers see top candidates first
+  @@index([candidateId, createdAt])         // Helps candidates see their history
+}
