@@ -7,7 +7,7 @@ const envSchema = z.object({
   REDIS_URL: z.string().url(),
   ACCESS_TOKEN_SECRET: z.string().min(32),
   REFRESH_TOKEN_SECRET: z.string().min(32),
-  OPENAI_API_KEY: z.string(),
+  GEMINI_API_KEY: z.string(),
   AWS_S3_BUCKET: z.string(), // New for Resume storage
 });
 

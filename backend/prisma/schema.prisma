@@ -65,7 +65,7 @@ model Application {
   jobId       String
   candidateId String
   resumeUrl   String
-  aiScore     Decimal?
+  aiScore     Float?
   status      String   @default("PENDING")
   job         Job      @relation(fields: [jobId], references: [id])
   candidate   User     @relation(fields: [candidateId], references: [id])
