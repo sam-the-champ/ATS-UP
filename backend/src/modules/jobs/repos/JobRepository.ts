@@ -1,4 +1,8 @@
-import { JobStatus } from '@prisma/client';
+import {
+  Job,
+  JobStatus,
+} from '@prisma/client';
+
 import { db } from '../../../config/db';
 import { CacheService } from '../../../core/cache/RedisService';
 
@@ -9,152 +13,275 @@ export class JobRepository {
     description: string;
     location: string;
     employerId: string;
-  }) {
+  }): Promise<Job> {
 
-    const job = await db.job.create({
-      data,
-    });
+    try {
 
-    // Clear stale cache after creating a new job
-    await CacheService.invalidate('jobs:open:all');
+      const job = await db.job.create({
+        data,
+      });
 
-    return job;
-  }
+      // Clear stale cache
+      await CacheService.invalidate(
+        'jobs:open:all'
+      );
 
-  static async findAllOpen() {
+      return job;
 
-    const cacheKey = 'jobs:open:all';
+    } catch (error) {
 
-    // 1. Try Redis cache first
-    const cachedJobs =
-      await CacheService.get(cacheKey);
+      console.error(
+        'Error creating job:',
+        error
+      );
 
-    if (cachedJobs) {
-      return cachedJobs;
+      throw error;
     }
-
-    // 2. Query database if cache miss
-    const jobs = await db.job.findMany({
-
-      where: {
-        status: JobStatus.OPEN,
-      },
-
-      include: {
-        employer: {
-          select: {
-            id: true,
-            email: true,
-          },
-        },
-      },
-
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
-
-    // 3. Store in cache for 60 seconds
-    await CacheService.set(
-      cacheKey,
-      jobs,
-      60
-    );
-
-    return jobs;
   }
 
-  static async findById(id: string) {
+  static async findAllOpen(): Promise<Job[]> {
 
-    return await db.job.findUnique({
+    try {
 
-      where: {
-        id,
-      },
+      const cacheKey = 'jobs:open:all';
 
-      include: {
-        employer: {
-          select: {
-            id: true,
-            email: true,
+      // Try cache first
+      const cachedJobs =
+        await CacheService.get(cacheKey);
+
+      if (cachedJobs) {
+        return cachedJobs;
+      }
+
+      // Query database
+      const jobs = await db.job.findMany({
+
+        where: {
+          status: JobStatus.OPEN,
+        },
+
+        include: {
+
+          employer: {
+            select: {
+              id: true,
+              email: true,
+            },
+          },
+
+          _count: {
+            select: {
+              applications: true,
+            },
           },
         },
 
-        applications: true,
-      },
-    });
+        orderBy: {
+          createdAt: 'desc',
+        },
+      });
+
+      // Cache result
+      await CacheService.set(
+        cacheKey,
+        jobs,
+        60
+      );
+
+      return jobs;
+
+    } catch (error) {
+
+      console.error(
+        'Error fetching open jobs:',
+        error
+      );
+
+      throw error;
+    }
+  }
+
+  static async findById(
+    id: string
+  ): Promise<Job | null> {
+
+    try {
+
+      return await db.job.findUnique({
+
+        where: {
+          id,
+        },
+
+        include: {
+
+          employer: {
+            select: {
+              id: true,
+              email: true,
+            },
+          },
+
+          applications: true,
+
+          _count: {
+            select: {
+              applications: true,
+            },
+          },
+        },
+      });
+
+    } catch (error) {
+
+      console.error(
+        'Error fetching job by ID:',
+        error
+      );
+
+      throw error;
+    }
   }
 
   static async findPaged(
     limit: number,
     cursor?: string
-  ) {
+  ): Promise<Job[]> {
 
-    return await db.job.findMany({
+    try {
 
-      take: limit,
+      const cacheKey =
+        `jobs:paged:${limit}:${cursor || 'first'}`;
 
-      skip: cursor ? 1 : 0,
+      // Try paginated cache
+      const cachedJobs =
+        await CacheService.get(cacheKey);
 
-      cursor: cursor
-        ? { id: cursor }
-        : undefined,
+      if (cachedJobs) {
+        return cachedJobs;
+      }
 
-      where: {
-        status: JobStatus.OPEN,
-      },
+      const jobs = await db.job.findMany({
 
-      include: {
-        employer: {
-          select: {
-            id: true,
-            email: true,
+        take: limit,
+
+        skip: cursor ? 1 : 0,
+
+        cursor: cursor
+          ? { id: cursor }
+          : undefined,
+
+        where: {
+          status: JobStatus.OPEN,
+        },
+
+        include: {
+
+          employer: {
+            select: {
+              id: true,
+              email: true,
+            },
+          },
+
+          _count: {
+            select: {
+              applications: true,
+            },
           },
         },
-      },
 
-      orderBy: {
-        createdAt: 'desc',
-      },
-    });
+        orderBy: {
+          createdAt: 'desc',
+        },
+      });
+
+      // Cache paginated result
+      await CacheService.set(
+        cacheKey,
+        jobs,
+        60
+      );
+
+      return jobs;
+
+    } catch (error) {
+
+      console.error(
+        'Error fetching paged jobs:',
+        error
+      );
+
+      throw error;
+    }
   }
 
   static async updateStatus(
     jobId: string,
     status: JobStatus
-  ) {
+  ): Promise<Job> {
 
-    const updatedJob =
-      await db.job.update({
+    try {
 
-        where: {
-          id: jobId,
-        },
+      const updatedJob =
+        await db.job.update({
 
-        data: {
-          status,
-        },
-      });
+          where: {
+            id: jobId,
+          },
 
-    // Invalidate cache after status update
-    await CacheService.invalidate('jobs:open:all');
+          data: {
+            status,
+          },
+        });
 
-    return updatedJob;
+      // Invalidate stale cache
+      await CacheService.invalidate(
+        'jobs:open:all'
+      );
+
+      return updatedJob;
+
+    } catch (error) {
+
+      console.error(
+        'Error updating job status:',
+        error
+      );
+
+      throw error;
+    }
   }
 
-  static async delete(jobId: string) {
+  static async delete(
+    jobId: string
+  ): Promise<Job> {
 
-    const deletedJob =
-      await db.job.delete({
+    try {
 
-        where: {
-          id: jobId,
-        },
-      });
+      const deletedJob =
+        await db.job.delete({
 
-    // Invalidate cache after deletion
-    await CacheService.invalidate('jobs:open:all');
+          where: {
+            id: jobId,
+          },
+        });
 
-    return deletedJob;
+      // Invalidate stale cache
+      await CacheService.invalidate(
+        'jobs:open:all'
+      );
+
+      return deletedJob;
+
+    } catch (error) {
+
+      console.error(
+        'Error deleting job:',
+        error
+      );
+
+      throw error;
+    }
   }
 }
