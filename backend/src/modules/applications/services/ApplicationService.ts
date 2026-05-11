@@ -1,5 +1,7 @@
 import { db } from '../../../config/db';
 import { Queue } from 'bullmq';
+import { AIService } from '../../../utils/AIService';
+import { ApplicationRepository } from '../repos/ApplicationRepository';
 
 import {
   S3Client,
@@ -44,24 +46,89 @@ export class ApplicationService {
     resumeUrl: string
   ) {
 
-    const application = await db.application.create({
-      data: {
+    // Verify job exists and is open
+    const job = await db.job.findUnique({
+      where: { id: jobId },
+    });
+
+    if (!job || job.status !== 'OPEN') {
+      throw new Error('Job not found or not accepting applications');
+    }
+
+    // Check if candidate already applied
+    const existingApplication = await db.application.findFirst({
+      where: {
         candidateId,
         jobId,
-        resumeUrl,
-        status: "PROCESSING",
-      },
-
-      include: {
-        job: true,
       },
     });
 
+    if (existingApplication) {
+      throw new Error('You have already applied for this job');
+    }
+
+    const application = await ApplicationRepository.create({
+      candidateId,
+      jobId,
+      resumeUrl,
+    });
+
+    // Queue AI scoring job
     await scoringQueue.add('analyze-resume', {
       applicationId: application.id,
-      resumeText: "Extracted text from PDF...",
-      jobDescription: application.job.description,
+      resumeUrl: application.resumeUrl,
+      jobDescription: job.description,
     });
+
+    return application;
+  }
+
+  // =========================
+  // GET APPLICATIONS FOR JOB (Employer)
+  // =========================
+  static async getApplicationsForJob(jobId: string, employerId: string) {
+    // Verify employer owns the job
+    const job = await db.job.findUnique({
+      where: { id: jobId },
+    });
+
+    if (!job || job.employerId !== employerId) {
+      throw new Error('Unauthorized to view applications for this job');
+    }
+
+    return await ApplicationRepository.findByJobId(jobId);
+  }
+
+  // =========================
+  // GET APPLICATIONS BY CANDIDATE
+  // =========================
+  static async getApplicationsByCandidate(candidateId: string) {
+    return await ApplicationRepository.findByCandidateId(candidateId);
+  }
+
+  // =========================
+  // GET APPLICATION BY ID
+  // =========================
+  static async getApplicationById(applicationId: string, userId: string, userRole: string) {
+    const application = await ApplicationRepository.findById(applicationId);
+
+    if (!application) {
+      throw new Error('Application not found');
+    }
+
+    // Check permissions
+    if (userRole === 'CANDIDATE' && application.candidateId !== userId) {
+      throw new Error('Unauthorized to view this application');
+    }
+
+    if (userRole === 'EMPLOYER') {
+      const job = await db.job.findUnique({
+        where: { id: application.jobId },
+      });
+      if (!job || job.employerId !== userId) {
+        throw new Error('Unauthorized to view this application');
+      }
+    }
 
     return application;
   }
@@ -82,18 +149,13 @@ export class ApplicationService {
       ContentType: fileType,
     });
 
-    const uploadUrl = await getSignedUrl(
-      s3,
-      command,
-      { expiresIn: 300 }
-    );
+    const signedUrl = await getSignedUrl(s3, command, {
+      expiresIn: 3600, // 1 hour
+    });
 
     return {
-      uploadUrl,
+      signedUrl,
       key,
-
-      // safer approach than hardcoding S3 URL
-      fileUrl: `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`,
     };
   }
 }

@@ -1,13 +1,41 @@
 import {
   Job,
   JobStatus,
+  Prisma,
 } from '@prisma/client';
 
 import { db } from '../../../config/db';
 import { CacheService } from '../../../core/cache/RedisService';
 
+// =========================
+// TYPES
+// =========================
+type JobWithRelations =
+  Prisma.JobGetPayload<{
+    include: {
+      employer: {
+        select: {
+          id: true;
+          email: true;
+        };
+      };
+
+      _count: {
+        select: {
+          applications: true;
+        };
+      };
+    };
+  }>;
+
+// =========================
+// REPOSITORY
+// =========================
 export class JobRepository {
 
+  // =========================
+  // CREATE JOB
+  // =========================
   static async create(data: {
     title: string;
     description: string;
@@ -21,7 +49,7 @@ export class JobRepository {
         data,
       });
 
-      // Clear stale cache
+      // Invalidate cache
       await CacheService.invalidate(
         'jobs:open:all'
       );
@@ -39,11 +67,16 @@ export class JobRepository {
     }
   }
 
-  static async findAllOpen(): Promise<Job[]> {
+  // =========================
+  // FIND ALL OPEN JOBS
+  // =========================
+  static async findAllOpen():
+    Promise<JobWithRelations[]> {
 
     try {
 
-      const cacheKey = 'jobs:open:all';
+      const cacheKey =
+        'jobs:open:all';
 
       // Try cache first
       const cachedJobs =
@@ -54,32 +87,33 @@ export class JobRepository {
       }
 
       // Query database
-      const jobs = await db.job.findMany({
+      const jobs =
+        await db.job.findMany({
 
-        where: {
-          status: JobStatus.OPEN,
-        },
+          where: {
+            status: JobStatus.OPEN,
+          },
 
-        include: {
+          include: {
 
-          employer: {
-            select: {
-              id: true,
-              email: true,
+            employer: {
+              select: {
+                id: true,
+                email: true,
+              },
+            },
+
+            _count: {
+              select: {
+                applications: true,
+              },
             },
           },
 
-          _count: {
-            select: {
-              applications: true,
-            },
+          orderBy: {
+            createdAt: 'desc',
           },
-        },
-
-        orderBy: {
-          createdAt: 'desc',
-        },
-      });
+        });
 
       // Cache result
       await CacheService.set(
@@ -101,41 +135,67 @@ export class JobRepository {
     }
   }
 
+  // =========================
+  // FIND JOB BY ID
+  // =========================
   static async findById(
     id: string
-  ): Promise<Job | null> {
+  ): Promise<JobWithRelations | null> {
 
     try {
 
-      return await db.job.findUnique({
+      const cacheKey =
+        `job:id:${id}`;
 
-        where: {
-          id,
-        },
+      // Try cache first
+      const cachedJob =
+        await CacheService.get(cacheKey);
 
-        include: {
+      if (cachedJob) {
+        return cachedJob;
+      }
 
-          employer: {
-            select: {
-              id: true,
-              email: true,
-            },
+      // Query database
+      const job =
+        await db.job.findUnique({
+
+          where: {
+            id,
           },
 
-          applications: true,
+          include: {
 
-          _count: {
-            select: {
-              applications: true,
+            employer: {
+              select: {
+                id: true,
+                email: true,
+              },
+            },
+
+            _count: {
+              select: {
+                applications: true,
+              },
             },
           },
-        },
-      });
+        });
+
+      // Cache result
+      if (job) {
+
+        await CacheService.set(
+          cacheKey,
+          job,
+          300
+        );
+      }
+
+      return job;
 
     } catch (error) {
 
       console.error(
-        'Error fetching job by ID:',
+        'Error finding job by ID:',
         error
       );
 
@@ -143,17 +203,20 @@ export class JobRepository {
     }
   }
 
+  // =========================
+  // PAGINATED JOBS
+  // =========================
   static async findPaged(
     limit: number,
     cursor?: string
-  ): Promise<Job[]> {
+  ): Promise<JobWithRelations[]> {
 
     try {
 
       const cacheKey =
         `jobs:paged:${limit}:${cursor || 'first'}`;
 
-      // Try paginated cache
+      // Try cache first
       const cachedJobs =
         await CacheService.get(cacheKey);
 
@@ -161,40 +224,41 @@ export class JobRepository {
         return cachedJobs;
       }
 
-      const jobs = await db.job.findMany({
+      const jobs =
+        await db.job.findMany({
 
-        take: limit,
+          take: limit,
 
-        skip: cursor ? 1 : 0,
+          skip: cursor ? 1 : 0,
 
-        cursor: cursor
-          ? { id: cursor }
-          : undefined,
+          cursor: cursor
+            ? { id: cursor }
+            : undefined,
 
-        where: {
-          status: JobStatus.OPEN,
-        },
+          where: {
+            status: JobStatus.OPEN,
+          },
 
-        include: {
+          include: {
 
-          employer: {
-            select: {
-              id: true,
-              email: true,
+            employer: {
+              select: {
+                id: true,
+                email: true,
+              },
+            },
+
+            _count: {
+              select: {
+                applications: true,
+              },
             },
           },
 
-          _count: {
-            select: {
-              applications: true,
-            },
+          orderBy: {
+            createdAt: 'desc',
           },
-        },
-
-        orderBy: {
-          createdAt: 'desc',
-        },
-      });
+        });
 
       // Cache paginated result
       await CacheService.set(
@@ -216,8 +280,11 @@ export class JobRepository {
     }
   }
 
+  // =========================
+  // UPDATE JOB STATUS
+  // =========================
   static async updateStatus(
-    jobId: string,
+    id: string,
     status: JobStatus
   ): Promise<Job> {
 
@@ -227,7 +294,7 @@ export class JobRepository {
         await db.job.update({
 
           where: {
-            id: jobId,
+            id,
           },
 
           data: {
@@ -235,7 +302,11 @@ export class JobRepository {
           },
         });
 
-      // Invalidate stale cache
+      // Invalidate caches
+      await CacheService.invalidate(
+        `job:id:${id}`
+      );
+
       await CacheService.invalidate(
         'jobs:open:all'
       );
@@ -253,31 +324,146 @@ export class JobRepository {
     }
   }
 
-  static async delete(
-    jobId: string
+  // =========================
+  // UPDATE JOB
+  // =========================
+  static async update(
+    id: string,
+    data: Prisma.JobUpdateInput
   ): Promise<Job> {
 
     try {
 
-      const deletedJob =
-        await db.job.delete({
+      const updatedJob =
+        await db.job.update({
 
           where: {
-            id: jobId,
+            id,
           },
+
+          data,
         });
 
-      // Invalidate stale cache
+      // Invalidate caches
+      await CacheService.invalidate(
+        `job:id:${id}`
+      );
+
       await CacheService.invalidate(
         'jobs:open:all'
       );
 
-      return deletedJob;
+      return updatedJob;
+
+    } catch (error) {
+
+      console.error(
+        'Error updating job:',
+        error
+      );
+
+      throw error;
+    }
+  }
+
+  // =========================
+  // DELETE JOB
+  // =========================
+  static async delete(
+    id: string
+  ): Promise<void> {
+
+    try {
+
+      await db.job.delete({
+
+        where: {
+          id,
+        },
+      });
+
+      // Invalidate caches
+      await CacheService.invalidate(
+        `job:id:${id}`
+      );
+
+      await CacheService.invalidate(
+        'jobs:open:all'
+      );
 
     } catch (error) {
 
       console.error(
         'Error deleting job:',
+        error
+      );
+
+      throw error;
+    }
+  }
+
+  // =========================
+  // FIND JOBS BY EMPLOYER
+  // =========================
+  static async findByEmployerId(
+    employerId: string
+  ): Promise<JobWithRelations[]> {
+
+    try {
+
+      const cacheKey =
+        `jobs:employer:${employerId}`;
+
+      // Try cache first
+      const cachedJobs =
+        await CacheService.get(cacheKey);
+
+      if (cachedJobs) {
+        return cachedJobs;
+      }
+
+      // Query database
+      const jobs =
+        await db.job.findMany({
+
+          where: {
+            employerId,
+          },
+
+          include: {
+
+            employer: {
+              select: {
+                id: true,
+                email: true,
+              },
+            },
+
+            _count: {
+              select: {
+                applications: true,
+              },
+            },
+          },
+
+          orderBy: {
+            createdAt: 'desc',
+          },
+        });
+
+      // Cache result
+      await CacheService.set(
+        cacheKey,
+        jobs,
+        300
+      );
+
+      return jobs;
+
+    } catch (error) {
+
+      console.error(
+        'Error finding jobs by employer ID:',
         error
       );
 

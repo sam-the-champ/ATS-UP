@@ -1,7 +1,7 @@
 import { Role } from '@prisma/client';
 import jwt from 'jsonwebtoken';
 import { PasswordUtils } from '../../../utils/PasswordUtils';
-import { db } from '../../../config/db';
+import { UserRepository } from '../repos/UserRepository';
 
 export class AuthService {
 
@@ -21,20 +21,41 @@ export class AuthService {
     );
   }
 
+  static verifyRefreshToken(token: string): { userId: string } | null {
+    try {
+      return jwt.verify(token, process.env.REFRESH_TOKEN_SECRET!) as { userId: string };
+    } catch (error) {
+      return null;
+    }
+  }
+
   static async register(
     email: string,
-    pass: string,
+    password: string,
     role: Role
   ) {
+    const hashedPassword = await PasswordUtils.hash(password);
 
-    const hashedPassword = await PasswordUtils.hash(pass);
-
-    return await db.user.create({
-      data: {
-        email,
-        password: hashedPassword,
-        role,
-      },
+    return await UserRepository.create({
+      email,
+      password: hashedPassword,
+      role,
     });
+  }
+
+  static async validateCredentials(email: string, password: string) {
+    const user = await UserRepository.findByEmail(email);
+
+    if (!user) {
+      return null;
+    }
+
+    const isValidPassword = await PasswordUtils.compare(password, user.password);
+
+    if (!isValidPassword) {
+      return null;
+    }
+
+    return user;
   }
 }

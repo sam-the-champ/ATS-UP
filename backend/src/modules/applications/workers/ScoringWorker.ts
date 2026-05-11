@@ -1,8 +1,26 @@
-import { Worker } from 'bullmq';
+import { Worker, Queue } from 'bullmq';
 import { db } from '../../../config/db';
-import { CacheService } from '../../../core/cache/RedisService';
+import { AIService } from '../../../utils/AIService';
+import { ApplicationRepository } from '../repos/ApplicationRepository';
 
-const redis = CacheService.getRedisClient();
+const redis = require('../../../core/cache/RedisService').CacheService.getRedisClient();
+
+// Create queue instance
+export const scoringQueue = new Queue('scoring-queue', {
+  connection: {
+    host: process.env.REDIS_HOST || 'localhost',
+    port: Number(process.env.REDIS_PORT) || 6379,
+  },
+  defaultJobOptions: {
+    attempts: 3,
+    backoff: {
+      type: 'exponential',
+      delay: 2000,
+    },
+    removeOnComplete: 50,
+    removeOnFail: 20,
+  },
+});
 
 // This worker processes the scoring queue
 export const scoringWorker = new Worker(
@@ -10,7 +28,7 @@ export const scoringWorker = new Worker(
   async (job) => {
     const {
       applicationId,
-      resumeText,
+      resumeUrl,
       jobDescription,
     } = job.data;
 
@@ -19,40 +37,48 @@ export const scoringWorker = new Worker(
     );
 
     try {
-      // TODO:
-      // Replace this mock logic with Gemini/OpenAI scoring later
+      // TODO: Extract text from resume PDF
+      // For now, using placeholder text
+      const resumeText = `
+        Experienced software engineer with 5+ years in full-stack development.
+        Proficient in Node.js, React, TypeScript, and cloud technologies.
+        Strong background in building scalable web applications.
+        Experience with databases, APIs, and modern development practices.
+      `;
 
-      const mockScore =
-        Math.floor(Math.random() * 100);
+      // Call Gemini AI for scoring
+      const aiScore = await AIService.scoreCandidate(
+        resumeText,
+        jobDescription
+      );
 
       // Update application with AI score
-      await db.application.update({
-        where: {
-          id: applicationId,
-        },
-
-        data: {
-          aiScore: mockScore,
-          status: 'SCORED',
-        },
-      });
+      await ApplicationRepository.updateAiScore(
+        applicationId,
+        aiScore
+      );
 
       console.log(
-        `Application ${applicationId} scored: ${mockScore}`
+        `Application ${applicationId} scored: ${aiScore}`
       );
     } catch (error) {
       console.error(`Error scoring application ${applicationId}:`, error);
+
+      // Update status to failed
+      await db.application.update({
+        where: { id: applicationId },
+        data: { status: 'FAILED' },
+      });
+
       throw error;
     }
   },
   {
     connection: redis,
-    defaultJobOptions: {
-      attempts: 3,
-      backoff: {
-        type: 'exponential',
-        delay: 2000,
-      },
+    concurrency: 2,
+    limiter: {
+      max: 10,
+      duration: 1000,
     },
   }
 );
