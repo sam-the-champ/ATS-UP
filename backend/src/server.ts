@@ -19,7 +19,10 @@ app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/jobs', jobRoutes);
 app.use('/api/v1/applications', applicationRoutes);
 
-console.log(process.env.DATABASE_URL);
+
+app.get("/", (req, res) => {
+    res.send("Api is running.....☮✝☪🕉☸✡🔯❤💛💚");
+});
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));

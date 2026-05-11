@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client';
+import { db } from '../../../config/db';
 import { Queue } from 'bullmq';
 
 import {
@@ -8,15 +8,19 @@ import {
 
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
-const prisma = new PrismaClient();
-
+// =========================
+// REDIS / BULLMQ QUEUE
+// =========================
 const scoringQueue = new Queue('scoring-queue', {
   connection: {
-    host: 'localhost',
-    port: 6379
-  }
+    host: process.env.REDIS_HOST || 'localhost',
+    port: Number(process.env.REDIS_PORT) || 6379,
+  },
 });
 
+// =========================
+// S3 CLIENT
+// =========================
 const s3 = new S3Client({
   region: process.env.AWS_REGION,
 
@@ -26,6 +30,9 @@ const s3 = new S3Client({
   },
 });
 
+// =========================
+// SERVICE LAYER
+// =========================
 export class ApplicationService {
 
   // =========================
@@ -37,35 +44,30 @@ export class ApplicationService {
     resumeUrl: string
   ) {
 
-    // 1. Create application in DB
-    const application = await prisma.application.create({
+    const application = await db.application.create({
       data: {
         candidateId,
         jobId,
         resumeUrl,
-        status: "PROCESSING"
+        status: "PROCESSING",
       },
 
       include: {
-        job: true
-      }
+        job: true,
+      },
     });
 
-    // 2. Add resume to AI scoring queue
     await scoringQueue.add('analyze-resume', {
       applicationId: application.id,
-
-      // later you'll extract actual PDF text
       resumeText: "Extracted text from PDF...",
-
-      jobDescription: application.job.description
+      jobDescription: application.job.description,
     });
 
     return application;
   }
 
   // =========================
-  // GENERATE PRESIGNED URL
+  // PRESIGNED URL GENERATION
   // =========================
   static async getPresignedUrl(
     fileName: string,
@@ -75,7 +77,7 @@ export class ApplicationService {
     const key = `resumes/${Date.now()}-${fileName}`;
 
     const command = new PutObjectCommand({
-      Bucket: process.env.AWS_BUCKET_NAME,
+      Bucket: process.env.AWS_BUCKET_NAME!,
       Key: key,
       ContentType: fileType,
     });
@@ -83,15 +85,15 @@ export class ApplicationService {
     const uploadUrl = await getSignedUrl(
       s3,
       command,
-      {
-        expiresIn: 60 * 5 // 5 minutes
-      }
+      { expiresIn: 300 }
     );
 
     return {
       uploadUrl,
       key,
-      fileUrl: `https://${process.env.AWS_BUCKET_NAME}.s3.amazonaws.com/${key}`
+
+      // safer approach than hardcoding S3 URL
+      fileUrl: `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`,
     };
   }
 }
